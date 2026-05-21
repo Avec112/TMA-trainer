@@ -290,6 +290,8 @@ export default function TMATrainer() {
   const [courseGuess, setCourseGuess] = useState(180);
   const [speedGuess, setSpeedGuess] = useState(8);
   const [zoom, setZoom] = useState(32);
+  const MIN_ZOOM = 16;
+  const MAX_ZOOM = 76;
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const dragRef = useRef({ active: false, startX: 0, startY: 0, startPan: { x: 0, y: 0 } });
   const plotRef = useRef(null);
@@ -574,7 +576,7 @@ export default function TMATrainer() {
       const mouseX = ((event.clientX - rect.left) / rect.width) * W;
       const mouseY = ((event.clientY - rect.top) / rect.height) * H;
 
-      const nextZoom = Math.min(72, Math.max(12, zoom + (event.deltaY < 0 ? 4 : -4)));
+      const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom + (event.deltaY < 0 ? 4 : -4)));
       if (nextZoom === zoom) return;
 
       const worldUnderMouse = {
@@ -634,12 +636,12 @@ export default function TMATrainer() {
         case "+":
         case "=":
           event.preventDefault();
-          setZoom((current) => Math.min(72, current + zoomStep));
+          setZoom((current) => Math.min(MAX_ZOOM, current + zoomStep));
           break;
         case "-":
         case "_":
           event.preventDefault();
-          setZoom((current) => Math.max(12, current - zoomStep));
+          setZoom((current) => Math.max(MIN_ZOOM, current - zoomStep));
           break;
         case " ":
           event.preventDefault();
@@ -664,7 +666,7 @@ export default function TMATrainer() {
           <div>
             <div className="flex items-baseline gap-3">
               <h1 className="text-3xl font-bold tracking-tight">TMA Trainer</h1>
-              <span className="text-slate-400">(Build: 58)</span>
+              <span className="text-slate-400">(Build: 59)</span>
             </div>
             <p className="text-slate-400 mt-1">Practice bearing lines, LOS classification, range/course/speed estimation.</p>
           </div>
@@ -918,13 +920,13 @@ export default function TMATrainer() {
               <div className="absolute bottom-4 right-4 flex flex-col gap-2">
                 <button
                   className="w-10 h-10 rounded-lg bg-slate-900/90 border border-slate-700 text-slate-100 text-xl hover:bg-slate-800"
-                  onClick={() => setZoom((z) => Math.min(72, z + 4))}
+                  onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z + 4))}
                 >
                   +
                 </button>
                 <button
                   className="w-10 h-10 rounded-lg bg-slate-900/90 border border-slate-700 text-slate-100 text-xl hover:bg-slate-800"
-                  onClick={() => setZoom((z) => Math.max(12, z - 4))}
+                  onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z - 4))}
                 >
                   −
                 </button>
