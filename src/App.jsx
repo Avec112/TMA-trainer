@@ -5,6 +5,13 @@ import { Card, CardContent } from "@/components/ui/card";
 const DEG = Math.PI / 180;
 const NM_PER_KT_PER_MIN = 1 / 60;
 const SCENARIO_DURATION_MIN = 24;
+const MAX_TRAINING_RANGE_NM = 18;
+const MIN_TRAINING_RANGE_NM = 3;
+const WORLD_LIMIT_NM = 16;
+const MAX_BEARING_LINE_LENGTH_NM = 30;
+const MIN_BEARING_SPREAD_DEG = 5;
+const MAX_BEARING_SPREAD_DEG = 35;
+const MIN_ABS_BEARING_RATE_DEG_PER_MIN = 0.18;
 
 function norm360(d) {
   return ((d % 360) + 360) % 360;
@@ -45,6 +52,23 @@ function lineFromBearing(origin, bearing, length = 100) {
   return {
     a: origin,
     b: pointAtBearingRange(origin, bearing, length),
+  };
+}
+
+function bearingLineIntersection(a, b) {
+  const d1 = unitFromCourse(a.brg);
+  const d2 = unitFromCourse(b.brg);
+  const cross = d1.x * d2.y - d1.y * d2.x;
+
+  if (Math.abs(cross) < 0.0001) return null;
+
+  const dx = b.own.x - a.own.x;
+  const dy = b.own.y - a.own.y;
+  const t = (dx * d2.y - dy * d2.x) / cross;
+
+  return {
+    x: a.own.x + d1.x * t,
+    y: a.own.y + d1.y * t,
   };
 }
 
@@ -132,7 +156,7 @@ function coursePointsInside(courseDeg, side) {
   }
 }
 
-function randomEdgePosition(rng, side, margin = 2) {
+function randomEdgePosition(rng, side, margin = 0.35) {
   switch (side) {
     case "bottom":
       return { x: randomBetween(rng, -10, 10), y: -14 + margin };
@@ -149,29 +173,34 @@ function randomEdgePosition(rng, side, margin = 2) {
 
 function buildCandidateScenario(rng) {
   const ownSideOptions = ["bottom", "top", "left", "right"];
-  const tgtSideOptions = ["bottom", "top", "left", "right"];
-
   const ownSide = ownSideOptions[randomInt(rng, 0, ownSideOptions.length - 1)];
-  const tgtSide = tgtSideOptions[randomInt(rng, 0, tgtSideOptions.length - 1)];
 
   let ownCourse = randomInt(rng, 0, 359);
   while (!coursePointsInside(ownCourse, ownSide)) {
     ownCourse = randomInt(rng, 0, 359);
   }
 
+  const ownSpeed = randomInt(rng, 8, 14);
+  const ownStart = randomEdgePosition(rng, ownSide);
+
+  // Create the contact from ownship's initial line of sight.
+  // This keeps the target inside a realistic sonar-training range instead of
+  // placing it randomly somewhere on the far world edge.
+  const bearingToTarget = randomInt(rng, 0, 359);
+  const initialRange = randomBetween(rng, MIN_TRAINING_RANGE_NM, MAX_TRAINING_RANGE_NM);
+  const tgtStart = pointAtBearingRange(ownStart, bearingToTarget, initialRange);
+
   let tgtCourse = randomInt(rng, 0, 359);
-  while (!coursePointsInside(tgtCourse, tgtSide)) {
+  let guard = 0;
+  while (guard < 100) {
+    const projectedTgt = move(tgtStart, tgtCourse, 12, SCENARIO_DURATION_MIN);
+    if (Math.abs(projectedTgt.x) <= WORLD_LIMIT_NM && Math.abs(projectedTgt.y) <= WORLD_LIMIT_NM) break;
     tgtCourse = randomInt(rng, 0, 359);
+    guard += 1;
   }
 
-  const ownSpeed = randomInt(rng, 8, 14);
   const tgtSpeed = randomInt(rng, 4, 14);
-
-  const ownStart = randomEdgePosition(rng, ownSide);
-  const tgtStart = randomEdgePosition(rng, tgtSide);
-
-  const initialBearing = bearingDeg(ownStart, tgtStart);
-  const initialLos = classifyLOS(ownCourse, ownSpeed, tgtCourse, tgtSpeed, initialBearing);
+  const initialLos = classifyLOS(ownCourse, ownSpeed, tgtCourse, tgtSpeed, bearingToTarget);
 
   let ownManeuverDelta = 55;
   const crossingBias = angleDiff(tgtCourse, ownCourse);
@@ -187,7 +216,6 @@ function buildCandidateScenario(rng) {
   return {
     name: "Generated sonar contact",
     ownSide,
-    tgtSide,
     ownCourse,
     ownSpeed,
     ownManeuverDelta,
@@ -199,15 +227,28 @@ function buildCandidateScenario(rng) {
 }
 
 function scenarioFitsWorld(sc) {
-  const limit = 15.5;
+  const bearings = [];
 
   for (let t = 0; t <= SCENARIO_DURATION_MIN; t += 2) {
     const { own } = ownshipAt(sc, sc.ownStart, t, false);
     const tgt = move(sc.tgtStart, sc.tgtCourse, sc.tgtSpeed, t);
+    const range = Math.hypot(tgt.x - own.x, tgt.y - own.y);
 
-    if (Math.abs(own.x) > limit || Math.abs(own.y) > limit) return false;
-    if (Math.abs(tgt.x) > limit || Math.abs(tgt.y) > limit) return false;
+    if (Math.abs(own.x) > WORLD_LIMIT_NM || Math.abs(own.y) > WORLD_LIMIT_NM) return false;
+    if (Math.abs(tgt.x) > WORLD_LIMIT_NM || Math.abs(tgt.y) > WORLD_LIMIT_NM) return false;
+    if (range < MIN_TRAINING_RANGE_NM || range > MAX_TRAINING_RANGE_NM) return false;
+
+    bearings.push(bearingDeg(own, tgt));
   }
+
+  const firstLegBearings = bearings.slice(0, 7); // 0-12 minutes.
+  const bearingSpread = Math.abs(angleDiff(firstLegBearings[firstLegBearings.length - 1], firstLegBearings[0]));
+  const avgBearingRate = bearingSpread / 12;
+
+  // Reject weak/near-parallel geometry and cartoonishly sharp fans.
+  if (bearingSpread < MIN_BEARING_SPREAD_DEG) return false;
+  if (bearingSpread > MAX_BEARING_SPREAD_DEG) return false;
+  if (avgBearingRate < MIN_ABS_BEARING_RATE_DEG_PER_MIN) return false;
 
   return true;
 }
@@ -312,6 +353,21 @@ export default function TMATrainer() {
   const H = 760;
   const scale = zoom;
 
+  const displayEntrySide = useMemo(() => {
+    if (data.length < 2) return sc.ownSide;
+
+    const first = data[0].own;
+    const second = data[1].own;
+    const dx = second.x - first.x;
+    const dy = second.y - first.y;
+
+    if (Math.abs(dy) >= Math.abs(dx)) {
+      return dy >= 0 ? "bottom" : "top";
+    }
+
+    return dx >= 0 ? "left" : "right";
+  }, [data, sc.ownSide]);
+
   const safePlotArea = {
     left: 285,
     right: W - 92,
@@ -320,36 +376,72 @@ export default function TMATrainer() {
   };
 
   function calculatePlotCenter(scaleValue) {
-    // Anchor ownship's first visible plot to the chosen safe edge.
-    // This makes scenarios feel like they enter from a plotting boundary rather than
-    // being arbitrarily centered in the display.
-    const firstOwnship = data[0].own;
-    const points = [...data.map((r) => r.own), ...data.map((r) => r.tgt)];
+    // Display rule:
+    // Place latest ownship close to the inner plotting edge, with the current LOS
+    // projecting through the plotter center. Then nudge the view just enough to keep
+    // every ownship plot inside the inner padding boundary.
+    const latestOwnship = latest.own;
+    const centerScreen = { x: W / 2, y: H / 2 };
 
-    const minX = Math.min(...points.map((p) => p.x));
-    const maxX = Math.max(...points.map((p) => p.x));
-    const minY = Math.min(...points.map((p) => p.y));
-    const maxY = Math.max(...points.map((p) => p.y));
+    const bearingScreenDir = {
+      x: Math.sin(latest.brg * DEG),
+      y: -Math.cos(latest.brg * DEG),
+    };
 
-    let centerX = (minX + maxX) / 2;
-    let centerY = (minY + maxY) / 2;
+    const outwardDir = {
+      x: -bearingScreenDir.x,
+      y: -bearingScreenDir.y,
+    };
 
-    if (sc.ownSide === "left") {
-      centerX = firstOwnship.x - (safePlotArea.left - W / 2) / scaleValue;
-    } else if (sc.ownSide === "right") {
-      centerX = firstOwnship.x - (safePlotArea.right - W / 2) / scaleValue;
+    const edgePaddingPx = 76;
+    const inner = {
+      left: edgePaddingPx,
+      right: W - edgePaddingPx,
+      top: edgePaddingPx,
+      bottom: H - edgePaddingPx,
+    };
+
+    const candidates = [];
+
+    if (outwardDir.x < -0.0001) {
+      candidates.push((inner.left - centerScreen.x) / outwardDir.x);
+    }
+    if (outwardDir.x > 0.0001) {
+      candidates.push((inner.right - centerScreen.x) / outwardDir.x);
+    }
+    if (outwardDir.y < -0.0001) {
+      candidates.push((inner.top - centerScreen.y) / outwardDir.y);
+    }
+    if (outwardDir.y > 0.0001) {
+      candidates.push((inner.bottom - centerScreen.y) / outwardDir.y);
     }
 
-    if (sc.ownSide === "bottom") {
-      centerY = firstOwnship.y + (safePlotArea.bottom - H / 2) / scaleValue;
-    } else if (sc.ownSide === "top") {
-      centerY = firstOwnship.y + (safePlotArea.top - H / 2) / scaleValue;
-    }
+    const edgeDistance = Math.max(0, Math.min(...candidates.filter((v) => Number.isFinite(v) && v > 0)));
+    const desiredDistance = Math.max(0, edgeDistance - 10);
+
+    const desiredOwnshipScreen = {
+      x: centerScreen.x + outwardDir.x * desiredDistance,
+      y: centerScreen.y + outwardDir.y * desiredDistance,
+    };
+
+    let centerX = latestOwnship.x - (desiredOwnshipScreen.x - W / 2) / scaleValue;
+    let centerY = latestOwnship.y + (desiredOwnshipScreen.y - H / 2) / scaleValue;
+
+    const ownScreens = data.map((r) => projectPoint({ x: r.own.x - centerX, y: r.own.y - centerY }, scaleValue, W, H));
+    const minScreenX = Math.min(...ownScreens.map((p) => p.x));
+    const maxScreenX = Math.max(...ownScreens.map((p) => p.x));
+    const minScreenY = Math.min(...ownScreens.map((p) => p.y));
+    const maxScreenY = Math.max(...ownScreens.map((p) => p.y));
+
+    if (minScreenX < inner.left) centerX -= (inner.left - minScreenX) / scaleValue;
+    if (maxScreenX > inner.right) centerX += (maxScreenX - inner.right) / scaleValue;
+    if (minScreenY < inner.top) centerY += (inner.top - minScreenY) / scaleValue;
+    if (maxScreenY > inner.bottom) centerY -= (maxScreenY - inner.bottom) / scaleValue;
 
     return { x: centerX, y: centerY };
   }
 
-  const plotCenter = useMemo(() => calculatePlotCenter(scale), [data, scale, sc]);
+  const plotCenter = useMemo(() => calculatePlotCenter(scale), [data, scale, displayEntrySide]);
 
   const truthErrNm = Math.hypot(guessCurrent.x - latest.tgt.x, guessCurrent.y - latest.tgt.y);
   const courseErr = Math.abs(angleDiff(courseGuess, sc.tgtCourse));
@@ -570,9 +662,9 @@ export default function TMATrainer() {
       <div className="w-full max-w-none space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="flex items-end gap-3">
+            <div className="flex items-baseline gap-3">
               <h1 className="text-3xl font-bold tracking-tight">TMA Trainer</h1>
-              <span className="text-slate-400 mb-1">(Build: 44)</span>
+              <span className="text-slate-400">(Build: 58)</span>
             </div>
             <p className="text-slate-400 mt-1">Practice bearing lines, LOS classification, range/course/speed estimation.</p>
           </div>
@@ -596,7 +688,7 @@ export default function TMATrainer() {
               >
                 <rect width={W} height={H} fill="rgb(2,6,23)" />
                 {data.map((r, i) => {
-                  const ln = lineFromBearing(r.own, r.brg, 26);
+                  const ln = lineFromBearing(r.own, r.brg, MAX_BEARING_LINE_LENGTH_NM);
                   const a = pp(ln.a);
                   const b = pp(ln.b);
                   return (
