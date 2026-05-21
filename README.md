@@ -1,3 +1,26 @@
+![](TMA-trainer.png)
+
+
+
+> [!WARNING]
+> 
+> ## Disclaimer
+> 
+> This project was created for educational and training purposes only.
+> 
+> I am not a professional sonar operator, naval officer, or certified expert in Target Motion Analysis (TMA).  
+> The geometry, terminology, and workflows implemented in this trainer are based on publicly available information, simulator communities, historical references, and personal research.
+> 
+> Large parts of the application were developed with assistance from AI tools.  
+> As a result, there may be inaccuracies, unrealistic assumptions, implementation mistakes, or simplifications in both the application and the generated scenarios.
+> 
+> I have not independently verified all referenced concepts, procedures, or documentation used during development.
+> 
+> The application has primarily been developed and tested on Linux.  
+> Windows and macOS compatibility has not been thoroughly verified.
+> 
+> This project should not be considered an authoritative reference for real-world submarine operations, sonar doctrine, or naval tactics.
+
 # TMA Trainer
 
 TMA Trainer is a lightweight sonar Target Motion Analysis (TMA) training tool inspired by classic submarine simulators and real-world manual plotting workflows.
